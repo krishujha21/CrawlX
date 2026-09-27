@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { startCrawl, getJobStatus } from '../api/client';
+import { startCrawl, getJobStatus, stopCrawl } from '../api/client';
 import CrawlLog from './CrawlLog';
 
 export default function CrawlPanel({ onCrawlComplete }) {
@@ -60,6 +60,17 @@ export default function CrawlPanel({ onCrawlComplete }) {
       console.error(err);
       setStatus('error');
       setErrorMsg('Failed to start crawl');
+    }
+  };
+
+  const handleStopCrawl = () => {
+    const currentJobId = jobId;
+    // Immediately return back to the form page
+    setStatus('idle');
+    setJobId(null);
+    setErrorMsg('');
+    if (currentJobId) {
+      stopCrawl(currentJobId).catch(() => {});
     }
   };
 
@@ -127,10 +138,24 @@ export default function CrawlPanel({ onCrawlComplete }) {
         {/* ── CRAWLING state ────────────────────────────────────────────────── */}
         {status === 'crawling' && (
           <>
-            <div className="flex flex-col items-center py-6 space-y-3">
+            <div className="flex flex-col items-center py-6 space-y-4">
               <div className="w-10 h-10 border-4 border-gray-700 border-t-cyan-500 rounded-full animate-spin" />
-              <p className="text-gray-300 animate-pulse">Crawling in progress…</p>
-              <p className="text-xs text-gray-600 font-mono">job: {jobId}</p>
+              <div className="text-center">
+                <p className="text-gray-300 font-medium animate-pulse">Crawling in progress…</p>
+                {jobId && <p className="text-xs text-gray-500 font-mono mt-1">job: {jobId}</p>}
+              </div>
+
+              {/* Stop Crawling button */}
+              <button
+                type="button"
+                onClick={handleStopCrawl}
+                className="flex items-center gap-2 px-5 py-2.5 bg-red-950/70 hover:bg-red-900/90 text-red-300 hover:text-white border border-red-700/60 hover:border-red-500 rounded-lg text-sm font-semibold transition-all duration-150 shadow-lg shadow-red-950/40 active:scale-95 cursor-pointer"
+              >
+                <svg className="w-4 h-4 text-red-400" fill="currentColor" viewBox="0 0 20 20">
+                  <rect x="5" y="5" width="10" height="10" rx="1.5" />
+                </svg>
+                Stop Crawling
+              </button>
             </div>
 
             {/* Live log panel */}

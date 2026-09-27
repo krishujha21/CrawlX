@@ -162,21 +162,11 @@ def crawl(
     seed_url: str,
     max_pages: int = 50,
     broadcast_fn: Optional[Callable[[dict], None]] = None,
+    cancel_check: Optional[Callable[[], bool]] = None,
 ) -> List[Dict]:
     """
     BFS-crawl starting from *seed_url*, limited to *max_pages* HTML pages
     within the same domain.
-
-    Parameters
-    ----------
-    broadcast_fn : optional callable
-        Called after each successfully fetched page with a dict:
-        { event, url, title, depth, page_count, total }
-        Used by the WebSocket connection manager to stream live events.
-        Errors inside broadcast_fn are caught and logged so the crawl
-        is never aborted by a broken WS connection.
-
-    Returns a list of page dicts (same structure as _fetch_page output).
     """
     seed_url = _normalize_url(seed_url)
     if not _is_valid_url(seed_url):
@@ -194,6 +184,10 @@ def crawl(
     logger.info("Starting BFS crawl from %s (max_pages=%d)", seed_url, max_pages)
 
     while queue and len(pages) < max_pages:
+        if cancel_check and cancel_check():
+            logger.info("Crawl aborted by user request.")
+            break
+
         url = queue.popleft()
         logger.info("[%d/%d] Fetching: %s", len(pages) + 1, max_pages, url)
 
@@ -224,6 +218,9 @@ def crawl(
 
         # Polite crawling delay
         if queue and len(pages) < max_pages:
+            if cancel_check and cancel_check():
+                logger.info("Crawl aborted before sleep.")
+                break
             time.sleep(CRAWL_DELAY)
 
     logger.info("Crawl finished. Pages collected: %d", len(pages))

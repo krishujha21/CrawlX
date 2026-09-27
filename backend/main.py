@@ -71,6 +71,7 @@ def get_db():
 # Key: job_id (str) → job status dict
 
 _jobs: Dict[str, dict] = {}
+_job_cancel_flags: Dict[str, bool] = {}
 
 
 # ── WebSocket Connection Manager ──────────────────────────────────────────────
@@ -189,9 +190,23 @@ def _run_crawl_job(job_id: str, seed_url: str, max_pages: int) -> None:
         _broadcast({"event": "started", "seed_url": seed_url, "max_pages": max_pages})
 
         # ── 1. Crawl ──────────────────────────────────────────────────────────
-        pages = crawl(seed_url, max_pages=max_pages, broadcast_fn=_broadcast)
+        pages = crawl(
+            seed_url,
+            max_pages=max_pages,
+            broadcast_fn=_broadcast,
+            cancel_check=lambda: _job_cancel_flags.get(job_id, False),
+        )
         job["pages_crawled"] = len(pages)
         logger.info("[job:%s] Crawled %d pages.", job_id, len(pages))
+
+        if _job_cancel_flags.get(job_id, False):
+            job["status"] = "stopped"
+            logger.info("[job:%s] Job stopped by user.", job_id)
+            _broadcast({
+                "event":       "stopped",
+                "total_pages": len(pages),
+            })
+            return
 
         # ── 2. Index ──────────────────────────────────────────────────────────
         db = get_db()
@@ -322,6 +337,24 @@ async def get_job_status(job_id: str):
     if job is None:
         raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
     return JobStatusResponse(**job)
+
+
+# ── POST /job/{job_id}/stop ──────────────────────────────────────────────────
+
+@app.post(
+    "/job/{job_id}/stop",
+    tags=["Crawler"],
+    summary="Stop a running crawl job",
+)
+async def stop_crawl_job(job_id: str):
+    """Signal a running crawl job to stop immediately."""
+    job = _jobs.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
+    _job_cancel_flags[job_id] = True
+    job["status"] = "stopping"
+    logger.info("[job:%s] Stop requested by client.", job_id)
+    return {"status": "stopping", "job_id": job_id}
 
 
 # ── GET /search ───────────────────────────────────────────────────────────────

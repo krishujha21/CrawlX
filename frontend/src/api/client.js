@@ -19,6 +19,16 @@ export const getJobStatus = async (jobId) => {
   return response.data;
 };
 
+export const stopCrawl = async (jobId) => {
+  try {
+    const response = await api.post(`/job/${jobId}/stop`);
+    return response.data;
+  } catch (err) {
+    console.warn('Failed to stop crawl job', err);
+    return null;
+  }
+};
+
 export const search = async (query) => {
   const response = await api.get('/search', { params: { q: query } });
   return response.data;
