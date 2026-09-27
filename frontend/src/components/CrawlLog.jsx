@@ -12,7 +12,7 @@ const WS_URL = (import.meta.env.VITE_WS_URL || 'ws://localhost:8000') + '/ws/cra
  *   maxPages {number}   — used to format [n/total] counters
  *   onDone   {function} — called when the backend emits { event: "done" }
  */
-export default function CrawlLog({ active, seedUrl, maxPages, onDone }) {
+export default function CrawlLog({ active, seedUrl, maxPages, onDone, onProgress }) {
   const [lines, setLines]   = useState([]);
   const [footer, setFooter] = useState(null);   // { text, ok } | null
   const bottomRef           = useRef(null);
@@ -46,6 +46,9 @@ export default function CrawlLog({ active, seedUrl, maxPages, onDone }) {
           break;
 
         case 'crawled':
+          if (onProgress) {
+            onProgress({ count: msg.page_count, total: msg.total ?? maxPages });
+          }
           setLines(prev => [...prev, {
             id:       Date.now() + Math.random(),
             type:     'page',

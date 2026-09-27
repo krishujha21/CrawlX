@@ -2,13 +2,21 @@ import React, { useState, useEffect } from 'react';
 import { startCrawl, getJobStatus, stopCrawl } from '../api/client';
 import CrawlLog from './CrawlLog';
 
+const PRESETS = [
+  { name: 'Books to Scrape', url: 'https://books.toscrape.com', pages: 25 },
+  { name: 'Quotes to Scrape', url: 'https://quotes.toscrape.com', pages: 15 },
+  { name: 'Python 3 Docs', url: 'https://docs.python.org/3/', pages: 30 },
+  { name: 'Wikipedia Crawler', url: 'https://en.wikipedia.org/wiki/Web_crawler', pages: 20 },
+];
+
 export default function CrawlPanel({ onCrawlComplete }) {
-  const [url, setUrl]         = useState('');
+  const [url, setUrl]           = useState('');
   const [maxPages, setMaxPages] = useState(50);
-  const [status, setStatus]   = useState('idle'); // idle | crawling | done | error
+  const [status, setStatus]     = useState('idle'); // idle | crawling | done | error
   const [errorMsg, setErrorMsg] = useState('');
-  const [jobId, setJobId]     = useState(null);
-  const [stats, setStats]     = useState(null);
+  const [jobId, setJobId]       = useState(null);
+  const [stats, setStats]       = useState(null);
+  const [progress, setProgress] = useState({ count: 0, total: 0 });
 
   // ── Poll job status (fallback / source of truth for the job state) ─────────
   useEffect(() => {
@@ -53,6 +61,7 @@ export default function CrawlPanel({ onCrawlComplete }) {
     setStatus('crawling');
     setErrorMsg('');
     setStats(null);
+    setProgress({ count: 0, total: maxPages });
     try {
       const res = await startCrawl(url, maxPages);
       setJobId(res.job_id);
@@ -69,6 +78,7 @@ export default function CrawlPanel({ onCrawlComplete }) {
     setStatus('idle');
     setJobId(null);
     setErrorMsg('');
+    setProgress({ count: 0, total: 0 });
     if (currentJobId) {
       stopCrawl(currentJobId).catch(() => {});
     }
@@ -86,7 +96,7 @@ export default function CrawlPanel({ onCrawlComplete }) {
         <h1 className="text-4xl font-bold text-center mb-2">
           <span className="text-cyan-500">Crawl</span>X
         </h1>
-        <p className="text-gray-400 text-center mb-8">Web Scraper &amp; Search Engine</p>
+        <p className="text-gray-400 text-center mb-8">High Performance Web Crawler &amp; Search Engine</p>
 
         {/* ── Error banner ─────────────────────────────────────────────────── */}
         {status === 'error' && (
@@ -105,7 +115,10 @@ export default function CrawlPanel({ onCrawlComplete }) {
         {(status === 'idle' || status === 'error') && (
           <form onSubmit={handleCrawl} className="space-y-6">
             <div>
-              <label className="block text-sm font-medium text-gray-400 mb-2">Seed URL</label>
+              <div className="flex items-center justify-between mb-2">
+                <label className="block text-sm font-medium text-gray-400">Seed URL</label>
+                <span className="text-xs text-gray-500">Must be http/https</span>
+              </div>
               <input
                 type="url"
                 required
@@ -114,9 +127,31 @@ export default function CrawlPanel({ onCrawlComplete }) {
                 value={url}
                 onChange={(e) => setUrl(e.target.value)}
               />
+
+              {/* Quick Presets */}
+              <div className="mt-3 flex flex-wrap gap-2 items-center">
+                <span className="text-xs text-gray-500 font-medium">Quick presets:</span>
+                {PRESETS.map((preset) => (
+                  <button
+                    key={preset.name}
+                    type="button"
+                    onClick={() => {
+                      setUrl(preset.url);
+                      setMaxPages(preset.pages);
+                    }}
+                    className="text-xs px-2.5 py-1 bg-gray-800/80 hover:bg-cyan-950/60 text-gray-300 hover:text-cyan-300 rounded border border-gray-700/60 hover:border-cyan-500/50 transition-all cursor-pointer"
+                  >
+                    {preset.name} <span className="text-gray-500">({preset.pages}p)</span>
+                  </button>
+                ))}
+              </div>
             </div>
+
             <div>
-              <label className="block text-sm font-medium text-gray-400 mb-2">Max Pages</label>
+              <div className="flex items-center justify-between mb-2">
+                <label className="block text-sm font-medium text-gray-400">Max Pages</label>
+                <span className="text-xs text-cyan-400 font-mono font-semibold">{maxPages} pages</span>
+              </div>
               <input
                 type="number"
                 min="1"
@@ -128,7 +163,7 @@ export default function CrawlPanel({ onCrawlComplete }) {
             </div>
             <button
               type="submit"
-              className="w-full bg-cyan-600 hover:bg-cyan-500 text-white font-bold py-3 px-4 rounded-lg transition-colors"
+              className="w-full bg-cyan-600 hover:bg-cyan-500 text-white font-bold py-3.5 px-4 rounded-lg transition-colors cursor-pointer shadow-lg shadow-cyan-900/20 active:scale-[0.99]"
             >
               Start Crawling
             </button>
@@ -141,9 +176,27 @@ export default function CrawlPanel({ onCrawlComplete }) {
             <div className="flex flex-col items-center py-6 space-y-4">
               <div className="w-10 h-10 border-4 border-gray-700 border-t-cyan-500 rounded-full animate-spin" />
               <div className="text-center">
-                <p className="text-gray-300 font-medium animate-pulse">Crawling in progress…</p>
+                <p className="text-gray-300 font-medium animate-pulse">Concurrent crawling in progress…</p>
                 {jobId && <p className="text-xs text-gray-500 font-mono mt-1">job: {jobId}</p>}
               </div>
+
+              {/* Live Progress Bar */}
+              {progress.total > 0 && (
+                <div className="w-full max-w-md bg-gray-950/80 p-3.5 rounded-lg border border-gray-800 space-y-2">
+                  <div className="flex justify-between text-xs font-mono text-gray-400">
+                    <span>Progress: {progress.count} / {progress.total} pages</span>
+                    <span className="text-cyan-400 font-bold">
+                      {Math.round((progress.count / progress.total) * 100)}%
+                    </span>
+                  </div>
+                  <div className="w-full bg-gray-800/80 rounded-full h-2 overflow-hidden">
+                    <div
+                      className="bg-gradient-to-r from-cyan-500 to-blue-500 h-2 rounded-full transition-all duration-300 shadow-sm shadow-cyan-500/50"
+                      style={{ width: `${Math.min(100, Math.round((progress.count / progress.total) * 100))}%` }}
+                    />
+                  </div>
+                </div>
+              )}
 
               {/* Stop Crawling button */}
               <button
@@ -163,6 +216,7 @@ export default function CrawlPanel({ onCrawlComplete }) {
               active={status === 'crawling'}
               seedUrl={url}
               maxPages={maxPages}
+              onProgress={(p) => setProgress(p)}
               onDone={handleWsDone}
             />
           </>

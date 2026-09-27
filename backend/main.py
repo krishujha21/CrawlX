@@ -21,6 +21,7 @@ from typing import Dict
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 from pymongo import MongoClient
 from pymongo.errors import ConnectionFailure
@@ -74,6 +75,34 @@ _jobs: Dict[str, dict] = {}
 _job_cancel_flags: Dict[str, bool] = {}
 
 
+def _save_job_to_db(job: dict) -> None:
+    """Persist job state to MongoDB for durability across restarts/scaling."""
+    try:
+        db = get_db()
+        db["jobs"].update_one(
+            {"job_id": job["job_id"]},
+            {"$set": job},
+            upsert=True,
+        )
+    except Exception as exc:
+        logger.debug("Failed to persist job %s: %s", job.get("job_id"), exc)
+
+
+def _get_job(job_id: str) -> dict | None:
+    """Lookup job from memory first, then fallback to MongoDB."""
+    if job_id in _jobs:
+        return _jobs[job_id]
+    try:
+        db = get_db()
+        doc = db["jobs"].find_one({"job_id": job_id}, {"_id": 0})
+        if doc:
+            _jobs[job_id] = doc
+            return doc
+    except Exception as exc:
+        logger.debug("Failed to query job %s from db: %s", job_id, exc)
+    return None
+
+
 # ── WebSocket Connection Manager ──────────────────────────────────────────────
 
 class ConnectionManager:
@@ -119,6 +148,7 @@ async def lifespan(app: FastAPI):
         db["pages"].create_index("url", unique=True, background=True)
         db["index"].create_index("token", unique=True, background=True)
         db["pagerank"].create_index("url", unique=True, background=True)
+        db["jobs"].create_index("job_id", unique=True, background=True)
         logger.info("✅ MongoDB collection indexes ensured.")
     except ConnectionFailure as exc:
         logger.error("❌ MongoDB connection failed at startup: %s", exc)
@@ -149,7 +179,8 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# ── CORS ──────────────────────────────────────────────────────────────────────
+# ── Middleware ────────────────────────────────────────────────────────────────
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
@@ -172,6 +203,7 @@ def _run_crawl_job(job_id: str, seed_url: str, max_pages: int) -> None:
     job = _jobs[job_id]
     job["status"] = "running"
     job["started_at"] = datetime.now(timezone.utc).isoformat()
+    _save_job_to_db(job)
     logger.info("[job:%s] Crawl started — %s (max=%d)", job_id, seed_url, max_pages)
 
     # Broadcast helper: schedules a coroutine from the sync background thread.
@@ -197,10 +229,12 @@ def _run_crawl_job(job_id: str, seed_url: str, max_pages: int) -> None:
             cancel_check=lambda: _job_cancel_flags.get(job_id, False),
         )
         job["pages_crawled"] = len(pages)
+        _save_job_to_db(job)
         logger.info("[job:%s] Crawled %d pages.", job_id, len(pages))
 
         if _job_cancel_flags.get(job_id, False):
             job["status"] = "stopped"
+            _save_job_to_db(job)
             logger.info("[job:%s] Job stopped by user.", job_id)
             _broadcast({
                 "event":       "stopped",
@@ -212,6 +246,7 @@ def _run_crawl_job(job_id: str, seed_url: str, max_pages: int) -> None:
         db = get_db()
         pages_indexed, total_tokens = build_and_store_index(pages, db)
         job["pages_indexed"] = pages_indexed
+        _save_job_to_db(job)
         logger.info("[job:%s] Indexed %d pages.", job_id, pages_indexed)
 
         # ── 3. PageRank ───────────────────────────────────────────────────────
@@ -219,6 +254,7 @@ def _run_crawl_job(job_id: str, seed_url: str, max_pages: int) -> None:
         logger.info("[job:%s] PageRank computed and stored.", job_id)
 
         job["status"] = "done"
+        _save_job_to_db(job)
 
         # ── Emit: done ────────────────────────────────────────────────────────
         _broadcast({
@@ -231,10 +267,12 @@ def _run_crawl_job(job_id: str, seed_url: str, max_pages: int) -> None:
         logger.exception("[job:%s] Crawl job failed: %s", job_id, exc)
         job["status"] = "failed"
         job["error"] = str(exc)
+        _save_job_to_db(job)
         _broadcast({"event": "error", "message": str(exc)})
 
     finally:
         job["finished_at"] = datetime.now(timezone.utc).isoformat()
+        _save_job_to_db(job)
 
 
 # ── Serve frontend static build (production only) ────────────────────────────
@@ -312,6 +350,7 @@ async def start_crawl(request: CrawlRequest, background_tasks: BackgroundTasks):
         "started_at":    None,
         "finished_at":   None,
     }
+    _save_job_to_db(_jobs[job_id])
 
     background_tasks.add_task(_run_crawl_job, job_id, request.url, request.max_pages)
 
@@ -333,7 +372,7 @@ async def start_crawl(request: CrawlRequest, background_tasks: BackgroundTasks):
 )
 async def get_job_status(job_id: str):
     """Return the current status of a crawl job by its job_id."""
-    job = _jobs.get(job_id)
+    job = _get_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
     return JobStatusResponse(**job)
@@ -348,11 +387,12 @@ async def get_job_status(job_id: str):
 )
 async def stop_crawl_job(job_id: str):
     """Signal a running crawl job to stop immediately."""
-    job = _jobs.get(job_id)
+    job = _get_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
     _job_cancel_flags[job_id] = True
     job["status"] = "stopping"
+    _save_job_to_db(job)
     logger.info("[job:%s] Stop requested by client.", job_id)
     return {"status": "stopping", "job_id": job_id}
 

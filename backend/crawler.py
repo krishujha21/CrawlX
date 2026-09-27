@@ -15,6 +15,7 @@ from __future__ import annotations
 import logging
 import time
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Callable, Dict, List, Optional, Set
 from urllib.parse import urljoin, urlparse, urldefrag
 
@@ -181,48 +182,72 @@ def crawl(
     session = requests.Session()
     session.max_redirects = 5
 
-    logger.info("Starting BFS crawl from %s (max_pages=%d)", seed_url, max_pages)
+    logger.info("Starting concurrent BFS crawl from %s (max_pages=%d)", seed_url, max_pages)
 
-    while queue and len(pages) < max_pages:
-        if cancel_check and cancel_check():
-            logger.info("Crawl aborted by user request.")
-            break
+    # Use a small thread pool for high-throughput concurrent fetching
+    max_workers = 5
 
-        url = queue.popleft()
-        logger.info("[%d/%d] Fetching: %s", len(pages) + 1, max_pages, url)
-
-        page = _fetch_page(url, session)
-        if page is None:
-            continue
-
-        pages.append(page)
-
-        # ── Broadcast real-time event ─────────────────────────────────────────
-        if broadcast_fn is not None:
-            try:
-                broadcast_fn({
-                    "event":      "crawled",
-                    "url":        page["url"],
-                    "title":      page.get("title", ""),
-                    "page_count": len(pages),
-                    "total":      max_pages,
-                })
-            except Exception as exc:
-                logger.debug("broadcast_fn error (ignored): %s", exc)
-
-        # Enqueue discovered links that are in the same domain and not yet seen
-        for link in page["links"]:
-            if link not in visited and _same_domain(link, seed_netloc):
-                visited.add(link)
-                queue.append(link)
-
-        # Polite crawling delay
-        if queue and len(pages) < max_pages:
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        while queue and len(pages) < max_pages:
             if cancel_check and cancel_check():
-                logger.info("Crawl aborted before sleep.")
+                logger.info("Crawl aborted by user request.")
                 break
-            time.sleep(CRAWL_DELAY)
 
-    logger.info("Crawl finished. Pages collected: %d", len(pages))
+            # Pop a batch of URLs to fetch concurrently
+            batch_size = min(max_workers, max_pages - len(pages), len(queue))
+            current_batch = [queue.popleft() for _ in range(batch_size)]
+
+            # Submit concurrent fetch requests
+            future_to_url = {
+                executor.submit(_fetch_page, url, session): url
+                for url in current_batch
+            }
+
+            for future in as_completed(future_to_url):
+                if cancel_check and cancel_check():
+                    logger.info("Crawl aborted during batch.")
+                    break
+
+                if len(pages) >= max_pages:
+                    break
+
+                url = future_to_url[future]
+                try:
+                    page = future.result()
+                except Exception as exc:
+                    logger.debug("Fetch failed for %s: %s", url, exc)
+                    page = None
+
+                if page is None:
+                    continue
+
+                pages.append(page)
+
+                # ── Broadcast real-time event ─────────────────────────────────
+                if broadcast_fn is not None:
+                    try:
+                        broadcast_fn({
+                            "event":      "crawled",
+                            "url":        page["url"],
+                            "title":      page.get("title", ""),
+                            "page_count": len(pages),
+                            "total":      max_pages,
+                        })
+                    except Exception as exc:
+                        logger.debug("broadcast_fn error (ignored): %s", exc)
+
+                # Enqueue discovered links that are in the same domain and not yet seen
+                for link in page.get("links", []):
+                    if link not in visited and _same_domain(link, seed_netloc):
+                        visited.add(link)
+                        queue.append(link)
+
+            # Polite delay between batches
+            if queue and len(pages) < max_pages:
+                if cancel_check and cancel_check():
+                    break
+                time.sleep(CRAWL_DELAY)
+
+    logger.info("Concurrent crawl finished. Pages collected: %d", len(pages))
     session.close()
     return pages

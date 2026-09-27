@@ -112,15 +112,13 @@ def search(query: str, db: Database, top_k: int = 10) -> List[Dict]:
     index_col = db["index"]
     pages_col = db["pages"]
 
-    # ── 2. Accumulate TF-IDF scores per URL ──────────────────────────────────
+    # ── 2. Accumulate TF-IDF scores per URL (batch query) ──────────────────
     tfidf_scores: Dict[str, float] = {}
+    unique_tokens = list(set(query_tokens))
 
-    for token in set(query_tokens):          # deduplicate query tokens
-        entry = index_col.find_one({"token": token})
-        if entry is None:
-            logger.debug("Token '%s' not found in index.", token)
-            continue
-
+    # Fetch all matching token index documents in a SINGLE query
+    token_docs = list(index_col.find({"token": {"$in": unique_tokens}}))
+    for entry in token_docs:
         idf: float = entry.get("idf", 1.0)
         postings: List[Dict] = entry.get("postings", [])
 
@@ -157,16 +155,17 @@ def search(query: str, db: Database, top_k: int = 10) -> List[Dict]:
         reverse=True,
     )[:top_k]
 
-    # ── 6. Fetch page metadata and build result list ──────────────────────────
+    # ── 6. Batch-fetch page metadata for top_k results ───────────────────────
+    top_urls = [url for url, _ in ranked]
+    pages_cursor = pages_col.find(
+        {"url": {"$in": top_urls}},
+        {"_id": 0, "title": 1, "body": 1, "url": 1},
+    )
+    pages_map = {p["url"]: p for p in pages_cursor}
+
     results: List[Dict] = []
     for url, (raw_tfidf, pr, final) in ranked:
-        page = pages_col.find_one(
-            {"url": url},
-            {"_id": 0, "title": 1, "body": 1, "url": 1},
-        )
-        if page is None:
-            page = {"url": url, "title": url, "body": ""}
-
+        page = pages_map.get(url) or {"url": url, "title": url, "body": ""}
         snippet = _make_snippet(page.get("body", ""), query_tokens)
 
         results.append({

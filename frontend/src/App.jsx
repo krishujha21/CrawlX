@@ -12,6 +12,7 @@ function App() {
   const [isSearching, setIsSearching] = useState(false);
   const [searchError, setSearchError] = useState('');
   const [statsTrigger, setStatsTrigger] = useState(0);
+  const [queryTime, setQueryTime]       = useState(null);
 
   const handleCrawlComplete = useCallback(() => {
     setStatsTrigger(prev => prev + 1); // Refresh stats
@@ -22,8 +23,11 @@ function App() {
     setIsSearching(true);
     setSearchError('');
     setSearchQuery(query);
+    const start = performance.now();
     try {
       const data = await apiSearch(query);
+      const elapsed = Math.round(performance.now() - start);
+      setQueryTime(elapsed);
       setResults(data.results || []);
     } catch (err) {
       console.error('Search failed', err);
@@ -65,6 +69,17 @@ function App() {
               <div className="text-center py-12 text-gray-500">
                 <p className="text-xl">No results found for "<span className="text-gray-300">{searchQuery}</span>"</p>
                 <p className="mt-2">Try a different query or crawl more pages.</p>
+              </div>
+            )}
+
+            {!isSearching && results.length > 0 && (
+              <div className="flex justify-between items-center text-xs font-mono text-gray-500 mb-3 px-1">
+                <span>Showing top {results.length} ranked results</span>
+                {queryTime !== null && (
+                  <span>
+                    Query executed in <span className="text-cyan-400 font-semibold">{queryTime}ms</span>
+                  </span>
+                )}
               </div>
             )}
 
