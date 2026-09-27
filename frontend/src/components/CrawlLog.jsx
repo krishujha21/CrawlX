@@ -1,16 +1,24 @@
 import React, { useEffect, useRef, useState } from 'react';
 
-const WS_URL = (import.meta.env.VITE_WS_URL || 'ws://localhost:8000') + '/ws/crawl-log';
+function getWsUrl() {
+  const envWs = import.meta.env.VITE_WS_URL;
+  if (envWs && envWs.trim()) {
+    return envWs.trim().replace(/\/+$/, '') + '/ws/crawl-log';
+  }
+  const isHttps = typeof window !== 'undefined' && window.location.protocol === 'https:';
+  return (isHttps ? 'wss://crawlx-e0tw.onrender.com' : 'ws://localhost:8000') + '/ws/crawl-log';
+}
 
 /**
  * CrawlLog — dark terminal-style panel that streams live BFS crawl events
  * from the backend WebSocket at /ws/crawl-log.
  *
  * Props:
- *   active   {boolean}  — mount/connect when true, disconnect when false
- *   seedUrl  {string}   — displayed in the header line
- *   maxPages {number}   — used to format [n/total] counters
- *   onDone   {function} — called when the backend emits { event: "done" }
+ *   active     {boolean}  — mount/connect when true, disconnect when false
+ *   seedUrl    {string}   — displayed in the header line
+ *   maxPages   {number}   — used to format [n/total] counters
+ *   onDone     {function} — called when the backend emits { event: "done" }
+ *   onProgress {function} — called on each page crawl with { count, total }
  */
 export default function CrawlLog({ active, seedUrl, maxPages, onDone, onProgress }) {
   const [lines, setLines]   = useState([]);
@@ -25,11 +33,13 @@ export default function CrawlLog({ active, seedUrl, maxPages, onDone, onProgress
     setLines([]);
     setFooter(null);
 
-    const ws = new WebSocket(WS_URL);
+    const wsUrl = getWsUrl();
+    console.log('[CrawlLog] Connecting to WebSocket:', wsUrl);
+    const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 
     ws.onopen = () => {
-      // Connection is open; server will push events when the crawl starts.
+      console.log('[CrawlLog] WebSocket connected');
     };
 
     ws.onmessage = (evt) => {

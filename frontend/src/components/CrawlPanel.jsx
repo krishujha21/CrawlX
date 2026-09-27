@@ -21,10 +21,12 @@ export default function CrawlPanel({ onCrawlComplete }) {
   // ── Poll job status (fallback / source of truth for the job state) ─────────
   useEffect(() => {
     let interval;
+    let failCount = 0;
     if (status === 'crawling' && jobId) {
       interval = setInterval(async () => {
         try {
           const res = await getJobStatus(jobId);
+          failCount = 0;
           if (res.status === 'done') {
             setStats({ pages_crawled: res.pages_crawled, pages_indexed: res.pages_indexed });
             // Let CrawlLog's onDone handle the transition; this is a safety net
@@ -37,10 +39,13 @@ export default function CrawlPanel({ onCrawlComplete }) {
             clearInterval(interval);
           }
         } catch (err) {
-          console.error(err);
-          setStatus('error');
-          setErrorMsg('Error checking job status');
-          clearInterval(interval);
+          failCount++;
+          console.warn(`Polling job attempt ${failCount}/6 failed:`, err);
+          if (failCount >= 6) {
+            setStatus('error');
+            setErrorMsg('Lost connection to backend server.');
+            clearInterval(interval);
+          }
         }
       }, 2000);
     }

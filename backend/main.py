@@ -133,6 +133,7 @@ class ConnectionManager:
 
 
 manager = ConnectionManager()
+_main_loop = None
 
 
 # ── Lifespan ──────────────────────────────────────────────────────────────────
@@ -140,6 +141,11 @@ manager = ConnectionManager()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup / shutdown lifecycle."""
+    global _main_loop
+    import asyncio
+    _main_loop = asyncio.get_running_loop()
+    logger.info("Captured main event loop for threadsafe WS broadcast.")
+
     # ── Startup ───────────────────────────────────────────────────────────────
     try:
         db = get_db()
@@ -211,11 +217,12 @@ def _run_crawl_job(job_id: str, seed_url: str, max_pages: int) -> None:
     # running event loop.
     def _broadcast(event: dict) -> None:
         try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                asyncio.run_coroutine_threadsafe(manager.broadcast(event), loop)
+            if _main_loop is not None and _main_loop.is_running():
+                asyncio.run_coroutine_threadsafe(manager.broadcast(event), _main_loop)
+            else:
+                logger.warning("Main event loop not running; WS broadcast skipped")
         except Exception as exc:
-            logger.debug("WS broadcast skipped: %s", exc)
+            logger.warning("WS broadcast error: %s", exc)
 
     try:
         # ── Emit: started ─────────────────────────────────────────────────────
