@@ -51,7 +51,7 @@ logger = logging.getLogger(__name__)
 
 MONGO_URI       = os.getenv("MONGO_URI", "mongodb://localhost:27017")
 DB_NAME         = os.getenv("MONGO_DB", "crawlx")
-ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "*").split(",")
+ALLOWED_ORIGINS = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", "*").split(",") if o.strip()]
 ENVIRONMENT     = os.getenv("ENVIRONMENT", "development")
 
 _client: MongoClient | None = None
