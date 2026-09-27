@@ -15,8 +15,9 @@ export default function CrawlPanel({ onCrawlComplete }) {
   const [status, setStatus]     = useState('idle'); // idle | crawling | done | error
   const [errorMsg, setErrorMsg] = useState('');
   const [jobId, setJobId]       = useState(null);
-  const [stats, setStats]       = useState(null);
-  const [progress, setProgress] = useState({ count: 0, total: 0 });
+  const [stats, setStats]           = useState(null);
+  const [progress, setProgress]     = useState({ count: 0, total: 0 });
+  const [polledLogs, setPolledLogs] = useState([]);
 
   // ── Poll job status (fallback / source of truth for the job state) ─────────
   useEffect(() => {
@@ -27,6 +28,13 @@ export default function CrawlPanel({ onCrawlComplete }) {
         try {
           const res = await getJobStatus(jobId);
           failCount = 0;
+          if (res.logs && res.logs.length > 0) {
+            setPolledLogs(res.logs);
+            setProgress({
+              count: res.pages_crawled || res.logs.length,
+              total: res.max_pages || maxPages,
+            });
+          }
           if (res.status === 'done') {
             setStats({ pages_crawled: res.pages_crawled, pages_indexed: res.pages_indexed });
             // Let CrawlLog's onDone handle the transition; this is a safety net
@@ -67,6 +75,7 @@ export default function CrawlPanel({ onCrawlComplete }) {
     setErrorMsg('');
     setStats(null);
     setProgress({ count: 0, total: maxPages });
+    setPolledLogs([]);
     try {
       const res = await startCrawl(url, maxPages);
       setJobId(res.job_id);
@@ -84,6 +93,7 @@ export default function CrawlPanel({ onCrawlComplete }) {
     setJobId(null);
     setErrorMsg('');
     setProgress({ count: 0, total: 0 });
+    setPolledLogs([]);
     if (currentJobId) {
       stopCrawl(currentJobId).catch(() => {});
     }
@@ -221,6 +231,7 @@ export default function CrawlPanel({ onCrawlComplete }) {
               active={status === 'crawling'}
               seedUrl={url}
               maxPages={maxPages}
+              polledLogs={polledLogs}
               onProgress={(p) => setProgress(p)}
               onDone={handleWsDone}
             />

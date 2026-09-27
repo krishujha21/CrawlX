@@ -216,6 +216,20 @@ def _run_crawl_job(job_id: str, seed_url: str, max_pages: int) -> None:
     # manager.broadcast is async, so we use run_coroutine_threadsafe with the
     # running event loop.
     def _broadcast(event: dict) -> None:
+        if event.get("event") == "crawled":
+            if "logs" not in job:
+                job["logs"] = []
+            job["logs"].append({
+                "url":        event.get("url"),
+                "title":      event.get("title", ""),
+                "page_count": event.get("page_count", 0),
+                "total":      event.get("total", max_pages),
+            })
+            if len(job["logs"]) > 100:
+                job["logs"] = job["logs"][-100:]
+            job["pages_crawled"] = len(job["logs"])
+            if len(job["logs"]) % 5 == 0:
+                _save_job_to_db(job)
         try:
             if _main_loop is not None and _main_loop.is_running():
                 asyncio.run_coroutine_threadsafe(manager.broadcast(event), _main_loop)
@@ -319,9 +333,31 @@ async def crawl_log_ws(websocket: WebSocket):
     """
     await manager.connect(websocket)
     try:
-        # Keep the connection open; we just receive pings / close frames.
+        # Acknowledge connection immediately
+        await websocket.send_json({"event": "connected", "message": "WebSocket connected to CrawlX live stream"})
+
+        # Catch up: if a job is actively running, replay its recent logs so the client immediately sees progress
+        for j in list(_jobs.values()):
+            if j.get("status") == "running":
+                await websocket.send_json({
+                    "event": "started",
+                    "seed_url": j.get("seed_url"),
+                    "max_pages": j.get("max_pages"),
+                })
+                for log_item in (j.get("logs") or [])[-30:]:
+                    await websocket.send_json({
+                        "event": "crawled",
+                        "url": log_item.get("url"),
+                        "title": log_item.get("title", ""),
+                        "page_count": log_item.get("page_count", 0),
+                        "total": log_item.get("total", j.get("max_pages")),
+                    })
+                break
+
         while True:
-            await websocket.receive_text()
+            msg = await websocket.receive_text()
+            if msg in ("ping", '{"type":"ping"}', '{"type": "ping"}'):
+                await websocket.send_text("pong")
     except WebSocketDisconnect:
         manager.disconnect(websocket)
     except Exception:
@@ -351,11 +387,12 @@ async def start_crawl(request: CrawlRequest, background_tasks: BackgroundTasks):
         "status":        "started",
         "seed_url":      request.url,
         "max_pages":     request.max_pages,
-        "pages_crawled": None,
+        "pages_crawled": 0,
         "pages_indexed": None,
         "error":         None,
         "started_at":    None,
         "finished_at":   None,
+        "logs":          [],
     }
     _save_job_to_db(_jobs[job_id])
 
