@@ -476,3 +476,26 @@ async def stats_endpoint():
         total_words=total_words,
         index_size=index_size,
     )
+
+
+# ── POST /reset ───────────────────────────────────────────────────────────────
+
+@app.post(
+    "/reset",
+    tags=["System"],
+    summary="Clear all indexed data and reset database",
+)
+async def reset_database():
+    """Wipe pages, index, pagerank, and jobs collections to start completely fresh."""
+    try:
+        db = get_db()
+        db["pages"].delete_many({})
+        db["index"].delete_many({})
+        db["pagerank"].delete_many({})
+        db["jobs"].delete_many({})
+        db["meta"].delete_many({})
+        _jobs.clear()
+        logger.info("Database and index completely reset.")
+        return {"status": "ok", "message": "Index and crawled data cleared successfully."}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to reset database: {exc}")

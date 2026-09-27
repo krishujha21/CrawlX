@@ -39,4 +39,9 @@ export const getStats = async () => {
   return response.data;
 };
 
+export const resetDatabase = async () => {
+  const response = await api.post('/reset');
+  return response.data;
+};
+
 export default api;
