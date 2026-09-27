@@ -180,6 +180,18 @@ CrawlX/
 
 ---
 
+## 🤖 AI Stack & Development Workflow
+
+This project was architected and developed with collaborative AI pair-programming:
+
+| Domain | Model / Assistant | Responsibilities |
+|---|---|---|
+| **Planning & System Architecture** | **Claude** | System design, crawl pipeline specification, math formulation for ranking |
+| **Backend Engineering** | **Claude (Sonnet / Opus)** | BFS crawler, from-scratch TF-IDF indexer, iterative PageRank, FastAPI & WebSockets |
+| **Frontend Engineering** | **Gemini 3.1** | React 19 UI, Tailwind CSS v4 design system, real-time terminal log stream |
+
+---
+
 ## 🛡️ License
 
 MIT License. Built with ❤️ for educational and search engine architecture research.
