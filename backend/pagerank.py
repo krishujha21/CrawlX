@@ -18,6 +18,7 @@ import logging
 import math
 from typing import Dict, List
 
+from pymongo import UpdateOne
 from pymongo.database import Database
 
 logger = logging.getLogger(__name__)
@@ -143,12 +144,16 @@ def run_and_store_pagerank(pages: List[Dict], db: Database) -> Dict[str, float]:
     scores = compute_pagerank(graph)
 
     pr_col = db["pagerank"]
-    for url, score in scores.items():
-        pr_col.update_one(
+    pr_ops = [
+        UpdateOne(
             {"url": url},
             {"$set": {"url": url, "score": round(score, 10)}},
             upsert=True,
         )
+        for url, score in scores.items()
+    ]
+    if pr_ops:
+        pr_col.bulk_write(pr_ops, ordered=False)
 
     logger.info("PageRank stored for %d pages.", len(scores))
     return scores

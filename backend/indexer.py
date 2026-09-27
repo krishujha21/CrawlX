@@ -21,6 +21,7 @@ import re
 from collections import Counter
 from typing import Dict, List, Tuple
 
+from pymongo import UpdateOne
 from pymongo.database import Database
 
 logger = logging.getLogger(__name__)
@@ -110,6 +111,7 @@ def build_and_store_index(pages: List[Dict], db: Database) -> Tuple[int, int]:
     # Keyed by url for fast lookup during index building
     doc_tf: Dict[str, Dict[str, float]] = {}   # {url: {term: tf}}
     doc_freq: Dict[str, int] = {}              # {term: number_of_docs_containing_term}
+    pages_ops: List[UpdateOne] = []
 
     for page in pages:
         url   = page["url"]
@@ -127,19 +129,24 @@ def build_and_store_index(pages: List[Dict], db: Database) -> Tuple[int, int]:
         for term in tf:
             doc_freq[term] = doc_freq.get(term, 0) + 1
 
-        # Upsert page into MongoDB (keyed on url)
-        pages_col.update_one(
-            {"url": url},
-            {"$set": {
-                "url":        url,
-                "title":      title,
-                "body":       body,
-                "fetched_at": page.get("fetched_at"),
-                "status_code": page.get("status_code"),
-                "token_count": len(tokens),
-            }},
-            upsert=True,
+        # Prepare page upsert operation
+        pages_ops.append(
+            UpdateOne(
+                {"url": url},
+                {"$set": {
+                    "url":         url,
+                    "title":       title,
+                    "body":        body,
+                    "fetched_at":  page.get("fetched_at"),
+                    "status_code": page.get("status_code"),
+                    "token_count": len(tokens),
+                }},
+                upsert=True,
+            )
         )
+
+    if pages_ops:
+        pages_col.bulk_write(pages_ops, ordered=False)
 
     total_docs = pages_col.count_documents({})
 
@@ -157,19 +164,25 @@ def build_and_store_index(pages: List[Dict], db: Database) -> Tuple[int, int]:
                 inverted[term] = []
             inverted[term].append({"url": url, "tf": round(tf_val, 8)})
 
-    # Persist each token entry
-    for term, postings in inverted.items():
-        idf_val = idf_map.get(term, 1.0)
-        index_col.update_one(
+    # Persist tokens in batches with bulk_write
+    index_ops = [
+        UpdateOne(
             {"token": term},
             {"$set": {
                 "token":    term,
                 "postings": postings,
-                "idf":      round(idf_val, 8),
+                "idf":      round(idf_map.get(term, 1.0), 8),
                 "df":       doc_freq.get(term, 0),
             }},
             upsert=True,
         )
+        for term, postings in inverted.items()
+    ]
+
+    if index_ops:
+        batch_size = 1000
+        for i in range(0, len(index_ops), batch_size):
+            index_col.bulk_write(index_ops[i:i + batch_size], ordered=False)
 
     unique_tokens = len(inverted)
 
